@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
@@ -15,15 +15,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Verify environment
-        run: |
-          echo "Cement Daily PPTX V4"
-          node --version
-          npm --version
+      - name: Install dependencies
+        run: npm install
 
-      - name: Finish test
-        run: |
-          echo "V4 GitHub Actions test passed"
+      - name: Generate PPTX
+        run: npm run generate
 
+      - name: Upload PPTX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cement-daily-report
+          path: daily_report.pptx
+          if-no-files-found: error
