@@ -1,1 +1,29 @@
 
+name: Generate Cement Daily PPTX V4
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify environment
+        run: |
+          echo "Cement Daily PPTX V4"
+          node --version
+          npm --version
+
+      - name: Finish test
+        run: |
+          echo "V4 GitHub Actions test passed"
+
