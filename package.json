@@ -3,9 +3,10 @@
   "name": "cement-daily-pptx-v4",
   "version": "4.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vercel dev"
+    "generate": "node generate.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
 }
