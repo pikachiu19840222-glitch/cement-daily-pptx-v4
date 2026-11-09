@@ -1,0 +1,11 @@
+
+{
+  "name": "cement-daily-pptx-v4",
+  "version": "4.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {}
+}
