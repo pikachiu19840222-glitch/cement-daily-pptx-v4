@@ -4,6 +4,14 @@ name: Generate Cement Daily PPTX V4
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: cement-daily-release
+  cancel-in-progress: false
+
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -23,9 +31,48 @@ jobs:
       - name: Generate PPTX
         run: npm run generate
 
+      - name: Verify PPTX file
+        run: |
+          test -s daily_report.pptx
+          echo "PPTX generated successfully"
+          ls -lh daily_report.pptx
+
       - name: Upload PPTX artifact
         uses: actions/upload-artifact@v4
         with:
           name: cement-daily-report
           path: daily_report.pptx
           if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          TAG="daily-report-latest"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release exists"
+          else
+            gh release create "$TAG" \
+              --title "Cement Daily Report - Latest" \
+              --notes "Latest generated construction report." \
+              --target "$GITHUB_SHA" \
+              --latest
+          fi
+
+          gh release upload "$TAG" \
+            daily_report.pptx \
+            --clobber
+
+          echo "Release upload completed"
+
+      - name: Show PPTX download URL
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view daily-report-latest \
+            --json assets \
+            --jq '.assets[] | select(.name=="daily_report.pptx") | .url'
