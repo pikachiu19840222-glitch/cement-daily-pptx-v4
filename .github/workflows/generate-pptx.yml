@@ -30,6 +30,19 @@ on:
         required: false
         type: string
 
+      site_photo_1_url:
+        description: "施工照片1 URL"
+        required: false
+        type: string
+        default: ""
+
+      site_photo_2_url:
+        description: "施工照片2 URL"
+        required: false
+        type: string
+        default: ""
+
+
 
 permissions:
   contents: write
