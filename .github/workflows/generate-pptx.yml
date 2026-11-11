@@ -55,8 +55,17 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+
       - name: Generate PPTX
+        env:
+          REPORT_DATE: ${{ inputs.report_date }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          CONTRACTOR: ${{ inputs.contractor }}
+          WORKERS: ${{ inputs.workers }}
+          MANAGERS: ${{ inputs.managers }}
+          WORK_CONTENT: ${{ inputs.work_content }}
         run: npm run generate
+
 
       - name: Verify PPTX file
         run: |
