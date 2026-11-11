@@ -1,8 +1,35 @@
 
 name: Generate Cement Daily PPTX V4
 
+
 on:
   workflow_dispatch:
+    inputs:
+      report_date:
+        description: "施工日期"
+        required: false
+        type: string
+      project_name:
+        description: "工程名稱"
+        required: false
+        type: string
+      contractor:
+        description: "施工單位"
+        required: false
+        type: string
+      workers:
+        description: "施工人數"
+        required: false
+        type: string
+      managers:
+        description: "管理人數"
+        required: false
+        type: string
+      work_content:
+        description: "施工內容"
+        required: false
+        type: string
+
 
 permissions:
   contents: write
