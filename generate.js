@@ -139,11 +139,21 @@ async function main() {
 
   const original = await slide.async("string");
 
-  // 替換文字變數
-  const updated = replacePlaceholders(
-    original,
-    data
-  );
+  // 施工內容改為橫向排列
+const formattedData = {
+  ...data,
+  work_content: data.work_content
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .join("   ")
+};
+
+// 替換 PPT 模板變數
+const updated = replacePlaceholders(
+  original,
+  formattedData
+);
 
   // 寫回 PPTX
   zip.file(slidePath, updated);
