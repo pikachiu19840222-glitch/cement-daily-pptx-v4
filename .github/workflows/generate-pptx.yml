@@ -1,7 +1,6 @@
 
 name: Generate Cement Daily PPTX V4
 
-
 on:
   workflow_dispatch:
     inputs:
@@ -9,33 +8,40 @@ on:
         description: "施工日期"
         required: false
         type: string
+
       project_name:
         description: "工程名稱"
         required: false
         type: string
+
       contractor:
         description: "施工單位"
         required: false
         type: string
+
       workers:
         description: "施工人數"
         required: false
         type: string
+
       managers:
         description: "管理人數"
         required: false
         type: string
+
       work_content:
         description: "施工內容"
         required: false
         type: string
 
+      # 新增：施工照片 1 URL
       site_photo_1_url:
         description: "施工照片1 URL"
         required: false
         type: string
         default: ""
 
+      # 新增：施工照片 2 URL
       site_photo_2_url:
         description: "施工照片2 URL"
         required: false
@@ -43,32 +49,37 @@ on:
         default: ""
 
 
-
 permissions:
   contents: write
   actions: read
 
+
 concurrency:
   group: cement-daily-release
   cancel-in-progress: false
+
 
 jobs:
   generate:
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. 取得 GitHub 專案程式碼
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. 設定 Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
+      # 3. 安裝套件
       - name: Install dependencies
         run: npm install
 
-
+      # 4. 產生施工日報 PPTX
       - name: Generate PPTX
         env:
           REPORT_DATE: ${{ inputs.report_date }}
@@ -77,15 +88,21 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           MANAGERS: ${{ inputs.managers }}
           WORK_CONTENT: ${{ inputs.work_content }}
+
+          # 新增：傳送兩張施工照片 URL
+          SITE_PHOTO_1_URL: ${{ inputs.site_photo_1_url }}
+          SITE_PHOTO_2_URL: ${{ inputs.site_photo_2_url }}
+
         run: npm run generate
 
-
+      # 5. 驗證 PPTX 是否成功產生
       - name: Verify PPTX file
         run: |
           test -s daily_report.pptx
           echo "PPTX generated successfully"
           ls -lh daily_report.pptx
 
+      # 6. 上傳 PPTX Artifact
       - name: Upload PPTX artifact
         uses: actions/upload-artifact@v4
         with:
@@ -93,6 +110,7 @@ jobs:
           path: daily_report.pptx
           if-no-files-found: error
 
+      # 7. 建立或更新 GitHub Release
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -117,6 +135,7 @@ jobs:
 
           echo "Release upload completed"
 
+      # 8. 顯示 PPTX 下載連結
       - name: Show PPTX download URL
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
