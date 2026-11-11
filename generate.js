@@ -1,17 +1,13 @@
 
 /**
- * Cement Daily PPTX V5.3
- * 台泥施工日報正式固定模板
+ * 台泥施工日報 generate.js V5.4
  *
- * 功能：
- * 1. 保留公司原有 PPT 版型
- * 2. 自動填入施工資料
- * 3. 施工項目橫向排列
- * 4. 自動下載兩張施工照片
- * 5. 照片等比例放入左右照片框
+ * 保留公司正式 16:9 PPT 模板
+ * 施工項目依長度自動換行
+ * 施工照片填滿矩形並置中裁切
  *
  * Node.js 22
- * 套件：jszip
+ * Dependency: jszip
  */
 
 const fs = require("node:fs");
@@ -19,7 +15,7 @@ const path = require("node:path");
 const JSZip = require("jszip");
 
 // =====================================
-// 1. 模板及輸出檔案
+// 1. 基本設定
 // =====================================
 
 const TEMPLATE_NAME =
@@ -35,22 +31,24 @@ const OUTPUT_PATH = path.join(
   "daily_report.pptx"
 );
 
-const SLIDE_PATH =
-  "ppt/slides/slide1.xml";
+const SLIDE_PATH = "ppt/slides/slide1.xml";
 
 const RELS_PATH =
   "ppt/slides/_rels/slide1.xml.rels";
 
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
+const PHOTO_FRAMES = [
+  "Rectangle 27",
+  "Rectangle 30"
+];
+
 // =====================================
-// 2. 取得 GitHub Actions 參數
+// 2. 取得 GitHub Actions 資料
 // =====================================
 
 function input(name) {
-  return String(
-    process.env[name] ?? ""
-  ).trim();
+  return String(process.env[name] ?? "").trim();
 }
 
 const data = {
@@ -74,7 +72,7 @@ const photoUrls = [
 ];
 
 // =====================================
-// 3. XML 特殊字元處理
+// 3. XML 處理
 // =====================================
 
 function xmlEscape(value) {
@@ -86,14 +84,18 @@ function xmlEscape(value) {
     .replace(/'/g, "&apos;");
 }
 
-// =====================================
-// 4. 替換模板文字變數
-// =====================================
+function escapeRegex(value) {
+  return value.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+}
 
 function replacePlaceholders(xml, values) {
   let result = xml;
 
   for (const [key, value] of Object.entries(values)) {
+
     const token = `{{${key}}}`;
 
     if (!result.includes(token)) {
@@ -113,7 +115,7 @@ function replacePlaceholders(xml, values) {
 
   if (remaining) {
     throw new Error(
-      "模板尚有未替換欄位：" +
+      "尚有未填寫欄位：" +
       [...new Set(remaining)].join(", ")
     );
   }
@@ -122,12 +124,198 @@ function replacePlaceholders(xml, values) {
 }
 
 // =====================================
-// 5. 判斷 JPG / PNG 圖片及尺寸
+// 4. 施工項目整理
+// =====================================
+
+function normalizeWorkItems(text) {
+  return String(text)
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+// 計算文字大約佔用的寬度
+// 中文視為全形，英文數字約半形
+function textWidth(text) {
+  let width = 0;
+
+  for (const char of Array.from(text)) {
+    width += /[\u2E80-\u9FFF\uF900-\uFAFF]/.test(char)
+      ? 1
+      : 0.55;
+  }
+
+  return width;
+}
+
+// 依文字長度分行，優先保持每項完整
+function wrapWorkItems(items, maxWidth) {
+
+  const lines = [];
+  let current = "";
+
+  for (const item of items) {
+
+    const next = current
+      ? current + "   " + item
+      : item;
+
+    if (
+      current &&
+      textWidth(next) > maxWidth
+    ) {
+      lines.push(current);
+      current = item;
+    } else {
+      current = next;
+    }
+
+    // 單一施工項目太長時，才在項目內換行
+    while (
+      textWidth(current) > maxWidth
+    ) {
+      let cut = 0;
+
+      for (
+        let i = 1;
+        i <= current.length;
+        i++
+      ) {
+        if (
+          textWidth(current.slice(0, i)) >
+          maxWidth
+        ) {
+          break;
+        }
+
+        cut = i;
+      }
+
+      if (cut === 0) cut = 1;
+
+      lines.push(current.slice(0, cut));
+
+      current = current.slice(cut).trim();
+    }
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines;
+}
+
+// 根據內容量選擇字體及行數
+function layoutWorkContent(rawText) {
+
+  const items = normalizeWorkItems(rawText);
+
+  if (!items.length) {
+    throw new Error("施工內容不可為空");
+  }
+
+  // 對應目前模板的施工內容文字框
+  // 以較保守的寬度預留邊距
+  const candidates = [
+    { fontSize: 1100, width: 65, maxLines: 3 },
+    { fontSize: 1000, width: 72, maxLines: 3 },
+    { fontSize: 900, width: 80, maxLines: 4 },
+    { fontSize: 800, width: 90, maxLines: 4 }
+  ];
+
+  for (const option of candidates) {
+
+    const lines = wrapWorkItems(
+      items,
+      option.width
+    );
+
+    if (lines.length <= option.maxLines) {
+      return {
+        items,
+        lines,
+        fontSize: option.fontSize
+      };
+    }
+  }
+
+  throw new Error(
+    "施工內容超過單頁可容納範圍，" +
+    "請縮短描述或改為多頁報告；" +
+    "系統不會自動刪除施工項目。"
+  );
+}
+
+// 將施工內容替換為真正的 PowerPoint 換行
+function replaceWorkContent(xml, layout) {
+
+  const token = "{{work_content}}";
+
+  // 找到包含變數的文字 Run
+  const pattern =
+    /<a:r>(?:(?!<\/a:r>)[\s\S])*?\{\{work_content\}\}(?:(?!<\/a:r>)[\s\S])*?<\/a:r>/;
+
+  const match = xml.match(pattern);
+
+  if (!match) {
+    throw new Error(
+      "找不到 {{work_content}} 文字物件"
+    );
+  }
+
+  const originalRun = match[0];
+
+  // 保留模板原有文字格式，
+  // 僅調整字體大小與內容
+  const makeRun = (text) => {
+
+    let run = originalRun.replace(
+      token,
+      xmlEscape(text)
+    );
+
+    if (/<a:rPr\b/.test(run)) {
+
+      run = run.replace(
+        /<a:rPr\b[^>]*>/,
+        tag => {
+
+          if (/\bsz="\d+"/.test(tag)) {
+            return tag.replace(
+              /\bsz="\d+"/,
+              `sz="${layout.fontSize}"`
+            );
+          }
+
+          return tag.replace(
+            "<a:rPr",
+            `<a:rPr sz="${layout.fontSize}"`
+          );
+        }
+      );
+    }
+
+    return run;
+  };
+
+  const replacement = layout.lines
+    .map(makeRun)
+    .join("<a:br/>");
+
+  return xml.replace(
+    originalRun,
+    replacement
+  );
+}
+
+// =====================================
+// 5. 判斷圖片格式與尺寸
 // =====================================
 
 function imageInfo(buffer) {
 
-  // PNG
   const pngSignature = Buffer.from(
     "89504e470d0a1a0a",
     "hex"
@@ -137,28 +325,27 @@ function imageInfo(buffer) {
     buffer.length >= 24 &&
     buffer.subarray(0, 8).equals(pngSignature)
   ) {
+
     const w = buffer.readUInt32BE(16);
     const h = buffer.readUInt32BE(20);
 
     if (!w || !h) {
-      throw new Error("PNG 圖片尺寸無效");
+      throw new Error("PNG 尺寸無效");
     }
 
     return {
       ext: "png",
-      contentType: "image/png",
+      mime: "image/png",
       w,
       h
     };
   }
 
-  // JPEG
   if (
     buffer.length > 4 &&
     buffer[0] === 0xff &&
     buffer[1] === 0xd8
   ) {
-    let pos = 2;
 
     const sofMarkers = [
       0xc0, 0xc1, 0xc2, 0xc3,
@@ -166,6 +353,8 @@ function imageInfo(buffer) {
       0xc9, 0xca, 0xcb,
       0xcd, 0xce, 0xcf
     ];
+
+    let pos = 2;
 
     while (pos + 9 < buffer.length) {
 
@@ -208,6 +397,7 @@ function imageInfo(buffer) {
       }
 
       if (sofMarkers.includes(marker)) {
+
         const h = buffer.readUInt16BE(
           pos + 5
         );
@@ -217,14 +407,12 @@ function imageInfo(buffer) {
         );
 
         if (!w || !h) {
-          throw new Error(
-            "JPEG 圖片尺寸無效"
-          );
+          throw new Error("JPEG 尺寸無效");
         }
 
         return {
           ext: "jpg",
-          contentType: "image/jpeg",
+          mime: "image/jpeg",
           w,
           h
         };
@@ -235,12 +423,12 @@ function imageInfo(buffer) {
   }
 
   throw new Error(
-    "目前僅支援 JPG 或 PNG 照片"
+    "照片格式不支援，請使用 JPG 或 PNG"
   );
 }
 
 // =====================================
-// 6. 從扣子圖片 URL 下載照片
+// 6. 下載施工照片
 // =====================================
 
 async function downloadImage(url, label) {
@@ -249,6 +437,7 @@ async function downloadImage(url, label) {
     console.log(
       `${label}：未提供，保留空白照片框`
     );
+
     return null;
   }
 
@@ -258,13 +447,13 @@ async function downloadImage(url, label) {
     parsed = new URL(url);
   } catch {
     throw new Error(
-      `${label}：圖片網址無效`
+      `${label} URL 格式錯誤`
     );
   }
 
   if (parsed.protocol !== "https:") {
     throw new Error(
-      `${label}：圖片網址必須使用 HTTPS`
+      `${label} 必須使用 HTTPS URL`
     );
   }
 
@@ -286,43 +475,30 @@ async function downloadImage(url, label) {
 
     if (!response.ok) {
       throw new Error(
-        `${label}：下載失敗，HTTP ${response.status}。` +
-        "請確認圖片連結尚未過期。"
-      );
-    }
-
-    const declaredSize = Number(
-      response.headers.get(
-        "content-length"
-      ) || 0
-    );
-
-    if (declaredSize > MAX_IMAGE_BYTES) {
-      throw new Error(
-        `${label}：圖片超過 12 MB`
+        `${label} 下載失敗：HTTP ${response.status}。` +
+        "請確認扣子圖片 URL 尚未過期。"
       );
     }
 
     const chunks = [];
-    let size = 0;
+    let total = 0;
 
     for await (
       const chunk of response.body
     ) {
-      size += chunk.length;
 
-      if (size > MAX_IMAGE_BYTES) {
+      total += chunk.length;
+
+      if (total > MAX_IMAGE_BYTES) {
         throw new Error(
-          `${label}：圖片超過 12 MB`
+          `${label} 超過 12 MB`
         );
       }
 
       chunks.push(Buffer.from(chunk));
     }
 
-    const buffer = Buffer.concat(
-      chunks
-    );
+    const buffer = Buffer.concat(chunks);
 
     return {
       buffer,
@@ -333,7 +509,7 @@ async function downloadImage(url, label) {
 
     if (error.name === "AbortError") {
       throw new Error(
-        `${label}：下載逾時`
+        `${label} 下載逾時`
       );
     }
 
@@ -345,10 +521,101 @@ async function downloadImage(url, label) {
 }
 
 // =====================================
-// 7. 插入圖片到指定照片框
+// 7. 找到模板照片框
 // =====================================
 
-function addPictureToRectangle(
+function findRectangle(xml, name) {
+
+  const pattern = new RegExp(
+    `<p:sp>(?:(?!<p:sp>)[\\s\\S])*?` +
+    `<p:cNvPr\\b[^>]*\\bname="${escapeRegex(name)}"` +
+    `[^>]*>(?:(?!<\\/p:sp>)[\\s\\S])*?` +
+    `<\\/p:sp>`
+  );
+
+  const match = xml.match(pattern);
+
+  if (!match) {
+    throw new Error(
+      `找不到照片框：${name}`
+    );
+  }
+
+  const shape = match[0];
+
+  const pos = shape.match(
+    /<a:xfrm[^>]*>[\s\S]*?<a:off x="(\d+)" y="(\d+)"\s*\/>[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\s*\/>/
+  );
+
+  if (!pos) {
+    throw new Error(
+      `${name} 缺少位置或尺寸`
+    );
+  }
+
+  return {
+    shape,
+    x: Number(pos[1]),
+    y: Number(pos[2]),
+    w: Number(pos[3]),
+    h: Number(pos[4])
+  };
+}
+
+// =====================================
+// 8. 計算圖片置中裁切範圍
+// =====================================
+
+function calculateCrop(image, frame) {
+
+  const imageRatio = image.w / image.h;
+  const frameRatio = frame.w / frame.h;
+
+  let left = 0;
+  let right = 0;
+  let top = 0;
+  let bottom = 0;
+
+  if (imageRatio > frameRatio) {
+
+    // 圖片較寬：裁切左右兩側
+    const keepRatio =
+      frameRatio / imageRatio;
+
+    const crop = Math.round(
+      (1 - keepRatio) * 50000
+    );
+
+    left = crop;
+    right = crop;
+
+  } else if (imageRatio < frameRatio) {
+
+    // 圖片較高：裁切上下兩側
+    const keepRatio =
+      imageRatio / frameRatio;
+
+    const crop = Math.round(
+      (1 - keepRatio) * 50000
+    );
+
+    top = crop;
+    bottom = crop;
+  }
+
+  return {
+    left,
+    right,
+    top,
+    bottom
+  };
+}
+
+// =====================================
+// 9. 將圖片填滿指定照片框
+// =====================================
+
+function insertPicture(
   xml,
   rectangleName,
   image,
@@ -357,76 +624,18 @@ function addPictureToRectangle(
   picName
 ) {
 
-  const escapedName = rectangleName.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&"
+  const frame = findRectangle(
+    xml,
+    rectangleName
   );
 
-  // 找到公司模板內指定矩形
-  const pattern = new RegExp(
-    `<p:sp>(?:(?!<p:sp>)[\\s\\S])*?` +
-    `<p:cNvPr\\b[^>]*\\bname="${escapedName}"` +
-    `[^>]*(?:\\/\\>|\\>)` +
-    `(?:(?!<\\/p:sp>)[\\s\\S])*?` +
-    `<\\/p:sp>`
+  const crop = calculateCrop(
+    image,
+    frame
   );
 
-  const match = xml.match(pattern);
-
-  if (!match) {
-    throw new Error(
-      `找不到照片框：${rectangleName}`
-    );
-  }
-
-  const shape = match[0];
-
-  // 取得矩形位置及尺寸
-  const pos = shape.match(
-    /<a:xfrm[^>]*>[\s\S]*?<a:off x="(\d+)" y="(\d+)"\s*\/>[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\s*\/>/
-  );
-
-  if (!pos) {
-    throw new Error(
-      `${rectangleName} 缺少位置資料`
-    );
-  }
-
-  const x = Number(pos[1]);
-  const y = Number(pos[2]);
-  const w = Number(pos[3]);
-  const h = Number(pos[4]);
-
-  // 照片四周保留少量邊距
-  const margin = 20000;
-
-  const maxW = w - margin * 2;
-  const maxH = h - margin * 2;
-
-  // 等比例縮放
-  const scale = Math.min(
-    maxW / image.w,
-    maxH / image.h
-  );
-
-  const iw = Math.round(
-    image.w * scale
-  );
-
-  const ih = Math.round(
-    image.h * scale
-  );
-
-  // 置中定位
-  const ix = x + Math.round(
-    (w - iw) / 2
-  );
-
-  const iy = y + Math.round(
-    (h - ih) / 2
-  );
-
-  // 建立 PowerPoint 圖片 XML
+  // 圖片本身佔滿整個照片框
+  // 使用 srcRect 做裁切，不拉伸變形
   const picture = `
 <p:pic>
   <p:nvPicPr>
@@ -442,6 +651,14 @@ function addPictureToRectangle(
 
   <p:blipFill>
     <a:blip r:embed="${rid}"/>
+
+    <a:srcRect
+      l="${crop.left}"
+      t="${crop.top}"
+      r="${crop.right}"
+      b="${crop.bottom}"
+    />
+
     <a:stretch>
       <a:fillRect/>
     </a:stretch>
@@ -449,8 +666,14 @@ function addPictureToRectangle(
 
   <p:spPr>
     <a:xfrm>
-      <a:off x="${ix}" y="${iy}"/>
-      <a:ext cx="${iw}" cy="${ih}"/>
+      <a:off
+        x="${frame.x}"
+        y="${frame.y}"
+      />
+      <a:ext
+        cx="${frame.w}"
+        cy="${frame.h}"
+      />
     </a:xfrm>
 
     <a:prstGeom prst="rect">
@@ -459,15 +682,14 @@ function addPictureToRectangle(
   </p:spPr>
 </p:pic>`;
 
-  // 保留原本矩形作為底色
   return xml.replace(
-    shape,
-    shape + picture
+    frame.shape,
+    frame.shape + picture
   );
 }
 
 // =====================================
-// 8. 增加 PPT 圖片關聯
+// 10. 增加圖片關聯
 // =====================================
 
 function addRelationship(
@@ -475,6 +697,12 @@ function addRelationship(
   id,
   filename
 ) {
+
+  if (xml.includes(`Id="${id}"`)) {
+    throw new Error(
+      `Relationship ID 重複：${id}`
+    );
+  }
 
   const relationship =
     `<Relationship ` +
@@ -484,13 +712,7 @@ function addRelationship(
 
   if (!xml.includes("</Relationships>")) {
     throw new Error(
-      "投影片關聯檔格式不正確"
-    );
-  }
-
-  if (xml.includes(`Id="${id}"`)) {
-    throw new Error(
-      `圖片關聯 ID 已存在：${id}`
+      "PPT 關聯檔格式錯誤"
     );
   }
 
@@ -500,18 +722,14 @@ function addRelationship(
   );
 }
 
-// =====================================
-// 9. 增加圖片格式宣告
-// =====================================
-
-function ensureImageContentType(
+function addContentType(
   xml,
-  extension,
-  contentType
+  ext,
+  mime
 ) {
 
   const pattern = new RegExp(
-    `<Default\\s+Extension="${extension}"`,
+    `<Default\\b[^>]*Extension="${ext}"`,
     "i"
   );
 
@@ -521,23 +739,22 @@ function ensureImageContentType(
 
   return xml.replace(
     "</Types>",
-    `<Default Extension="${extension}" ` +
-    `ContentType="${contentType}"/>` +
+    `<Default Extension="${ext}" ` +
+    `ContentType="${mime}"/>` +
     "</Types>"
   );
 }
 
 // =====================================
-// 10. 主要 PPT 產生程序
+// 11. 主要執行程序
 // =====================================
 
 async function main() {
 
   console.log(
-    "開始生成台泥每日施工日報..."
+    "=== Cement Daily PPTX V5.4 ==="
   );
 
-  // 檢查必要施工資料
   const required = [
     "project_name",
     "report_date",
@@ -551,17 +768,16 @@ async function main() {
     key => !data[key]
   );
 
-  if (missing.length > 0) {
+  if (missing.length) {
     throw new Error(
-      "缺少必要資料：" +
+      "缺少施工資料：" +
       missing.join(", ")
     );
   }
 
-  // 檢查公司模板
   if (!fs.existsSync(TEMPLATE_PATH)) {
     throw new Error(
-      `找不到公司模板：${TEMPLATE_NAME}`
+      `找不到模板：${TEMPLATE_NAME}`
     );
   }
 
@@ -575,15 +791,24 @@ async function main() {
     data.project_name
   );
 
-  // 確認兩張照片是否提供
-  console.log(
-    "施工照片狀態：",
-    photoUrls.map(
-      url => url ? "已提供" : "未提供"
-    ).join(" / ")
+  // A. 計算施工項目排版
+  const layout = layoutWorkContent(
+    data.work_content
   );
 
-  // 下載兩張照片
+  console.log(
+    `施工項目：${layout.items.length} 項`
+  );
+
+  console.log(
+    `施工內容排版：${layout.lines.length} 行`
+  );
+
+  console.log(
+    `施工內容字體：${layout.fontSize / 100} pt`
+  );
+
+  // B. 下載照片
   const images = await Promise.all(
     photoUrls.map(
       (url, index) =>
@@ -594,7 +819,7 @@ async function main() {
     )
   );
 
-  // 讀取公司正式模板
+  // C. 開啟公司 PPT 模板
   const zip = await JSZip.loadAsync(
     fs.readFileSync(TEMPLATE_PATH)
   );
@@ -603,61 +828,55 @@ async function main() {
     SLIDE_PATH
   );
 
-  if (!slideFile) {
-    throw new Error(
-      "模板缺少第一頁投影片"
-    );
-  }
-
-  // 施工內容改為橫向排列
-  const formattedData = {
-    ...data,
-
-    work_content: data.work_content
-      .split(/\r?\n/)
-      .map(item => item.trim())
-      .filter(Boolean)
-      .join("   ")
-  };
-
-  // 自動替換施工文字
-  let slideXml = replacePlaceholders(
-    await slideFile.async("string"),
-    formattedData
-  );
-
-  // 讀取 PPT 關聯檔
   const relsFile = zip.file(
     RELS_PATH
   );
 
-  if (!relsFile) {
+  const typesFile = zip.file(
+    "[Content_Types].xml"
+  );
+
+  if (
+    !slideFile ||
+    !relsFile ||
+    !typesFile
+  ) {
     throw new Error(
-      "模板缺少投影片關聯檔"
+      "PPT 模板內部檔案不完整"
     );
   }
+
+  let slideXml = await slideFile.async(
+    "string"
+  );
 
   let relsXml = await relsFile.async(
     "string"
   );
 
-  // 讀取內容類型檔
-  const typesFile = zip.file(
-    "[Content_Types].xml"
-  );
-
-  if (!typesFile) {
-    throw new Error(
-      "模板缺少內容類型檔"
-    );
-  }
-
   let typesXml = await typesFile.async(
     "string"
   );
 
-  // 計算下一個圖片關聯 ID
-  const existingIds = [
+  // D. 施工內容先做多行排版
+  slideXml = replaceWorkContent(
+    slideXml,
+    layout
+  );
+
+  // E. 替換其餘施工資料
+  const {
+    work_content,
+    ...otherData
+  } = data;
+
+  slideXml = replacePlaceholders(
+    slideXml,
+    otherData
+  );
+
+  // F. 避免與模板現有圖片 ID 衝突
+  const relationshipIds = [
     ...relsXml.matchAll(
       /\bId="rId(\d+)"/g
     )
@@ -666,20 +885,21 @@ async function main() {
   );
 
   let nextRid =
-    Math.max(0, ...existingIds) + 1;
+    Math.max(0, ...relationshipIds) + 1;
 
-  // 正式模板照片框名稱
-  const photoFrames = [
-    "Rectangle 27",
-    "Rectangle 30"
-  ];
+  const pictureIds = [
+    ...slideXml.matchAll(
+      /<p:cNvPr\b[^>]*\bid="(\d+)"/g
+    )
+  ].map(
+    match => Number(match[1])
+  );
 
-  // 將照片嵌入 PPT
-  for (
-    let i = 0;
-    i < images.length;
-    i++
-  ) {
+  let nextPicId =
+    Math.max(0, ...pictureIds) + 1;
+
+  // G. 插入施工照片
+  for (let i = 0; i < 2; i++) {
 
     const image = images[i];
 
@@ -688,48 +908,52 @@ async function main() {
     }
 
     const filename =
-      `construction_photo_${i + 1}.` +
-      image.ext;
+      `construction_photo_${i + 1}.${image.ext}`;
 
     const rid = `rId${nextRid++}`;
 
-    // 加入照片檔案
+    const picId = nextPicId++;
+
     zip.file(
       `ppt/media/${filename}`,
       image.buffer
     );
 
-    // 放入指定矩形
-    slideXml = addPictureToRectangle(
+    slideXml = insertPicture(
       slideXml,
-      photoFrames[i],
+      PHOTO_FRAMES[i],
       image,
       rid,
-      200 + i,
+      picId,
       `施工照片 ${i + 1}`
     );
 
-    // 增加圖片關聯
     relsXml = addRelationship(
       relsXml,
       rid,
       filename
     );
 
-    // 增加圖片格式
-    typesXml = ensureImageContentType(
+    typesXml = addContentType(
       typesXml,
       image.ext,
-      image.contentType
+      image.mime
     );
 
     console.log(
-      `施工照片 ${i + 1}：嵌入成功，` +
-      `${image.w} × ${image.h}`
+      `施工照片 ${i + 1}：嵌入成功`
+    );
+
+    console.log(
+      `原始尺寸：${image.w} x ${image.h}`
+    );
+
+    console.log(
+      "顯示方式：填滿照片框，置中裁切"
     );
   }
 
-  // 寫回 PPT 內部檔案
+  // H. 寫回 PPT
   zip.file(
     SLIDE_PATH,
     slideXml
@@ -745,7 +969,7 @@ async function main() {
     typesXml
   );
 
-  // 重新封裝 PPTX
+  // I. 輸出 PPTX
   const buffer = await zip.generateAsync({
     type: "nodebuffer",
     compression: "DEFLATE",
@@ -754,7 +978,6 @@ async function main() {
     }
   });
 
-  // 輸出檔案
   fs.writeFileSync(
     OUTPUT_PATH,
     buffer
@@ -765,13 +988,13 @@ async function main() {
   );
 
   console.log(
-    "Output:",
+    "輸出檔案：",
     OUTPUT_PATH
   );
 }
 
 // =====================================
-// 11. 執行及錯誤處理
+// 12. 錯誤處理
 // =====================================
 
 main().catch(error => {
